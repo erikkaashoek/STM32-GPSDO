@@ -124,16 +124,16 @@
 // -----------------------
 #define GPSDO_OLED            // SSD1306 128x64 I2C OLED display
 #define GPSDO_MCP4725         // MCP4725 I2C 12-bit DAC
-#define GPSDO_PWM_DAC         // STM32 16-bit PWM DAC, requires two rc filters (2xr=20k, 2xc=10uF)
-#define GPSDO_AHT10           // I2C temperature and humidity sensor
+//#define GPSDO_PWM_DAC         // STM32 16-bit PWM DAC, requires two rc filters (2xr=20k, 2xc=10uF)
+//#define GPSDO_AHT10           // I2C temperature and humidity sensor
 #define GPSDO_GEN_2kHz        // generate 2kHz square wave test signal on pin PB9 using Timer 4
-#define GPSDO_BMP280_SPI      // SPI atmospheric pressure, temperature and altitude sensor
+//#define GPSDO_BMP280_SPI      // SPI atmospheric pressure, temperature and altitude sensor
 // #define GPSDO_INA219          // INA219 I2C current and voltage sensor
 // #define GPSDO_BLUETOOTH       // Bluetooth serial (HC-06 module)
-#define GPSDO_VCC             // Vcc (nominal 5V) ; reading Vcc requires 1:2 voltage divider to PA0
+//#define GPSDO_VCC             // Vcc (nominal 5V) ; reading Vcc requires 1:2 voltage divider to PA0
 #define GPSDO_VDD             // Vdd (nominal 3.3V) reads VREF internal ADC channel
-#define GPSDO_CALIBRATION     // auto-calibration is enabled
-#define GPSDO_UBX_CONFIG      // optimize u-blox GPS receiver configuration
+//#define GPSDO_CALIBRATION     // auto-calibration is enabled
+//#define GPSDO_UBX_CONFIG      // optimize u-blox GPS receiver configuration
 #define GPSDO_VERBOSE_NMEA    // GPS module NMEA stream echoed to USB serial xor Bluetooth serial
 
 // Includes
@@ -173,7 +173,7 @@ SerialCommands serial_commands_(&Serial2, serial_command_buffer_, sizeof(serial_
 SerialCommands serial_commands_(&Serial, serial_command_buffer_, sizeof(serial_command_buffer_), "\n", " ");
 #endif // BLUETOOTH
 
-#include <TinyGPS++.h>                             // get library here > http://arduiniana.org/libraries/tinygpsplus/
+#include <TinyGPS.h>                             // get library here > http://arduiniana.org/libraries/tinygpsplus/
 TinyGPSPlus gps;                                   // create the TinyGPS++ object
 
 #include <Wire.h>                                  // Hardware I2C library on STM32
@@ -298,10 +298,11 @@ volatile bool overflowflag = false;         // flag set by the overflow ISR, res
 volatile bool captureflag = false;          // flag set by the capture ISR, reset by the 2Hz ISR
 volatile bool overflowErrorFlag = false;    // flag set if there was an overflow processing error
 
+#define BIG_BUFFER 2000
 volatile uint64_t circbuf_ten64[11]; // 10+1 seconds circular buffer
 volatile uint64_t circbuf_hun64[101]; // 100+1 seconds circular buffer
 volatile uint64_t circbuf_tho64[1001]; // 1,000+1 seconds circular buffer
-volatile uint64_t circbuf_tth64[10001]; // 10,000 + 1 seconds circular buffer
+volatile uint64_t circbuf_tth64[(BIG_BUFFER+1)]; // 10,000 + 1 seconds circular buffer
 
 volatile uint32_t cbiten_newest=0; // index to oldest, newest data
 volatile uint32_t cbihun_newest=0;
@@ -561,7 +562,7 @@ void logfcount64() // called once per second from ISR to update all the ring buf
   // 10000 seconds buffer (2 hr 46 min 40 sec)
   circbuf_tth64[cbitth_newest]=fcount64;
   cbitth_newest++;
-  if (cbitth_newest > 10000) {
+  if (cbitth_newest > BIG_BUFFER) {
      cbTth_full=true; // this only needs to happen once, when the buffer fills up for the first time
      cbitth_newest = 0;   // (wrap around)
   }
@@ -611,17 +612,17 @@ void calcavg() {
     // oldest fcount is always circbuf_ten[cbiten_newest-2]
     // except when cbiten_newest is <2 (zero or 1)
   } 
-  if (cbTth_full) { // we want (latest fcount - oldest fcount) / 10000
+  if (cbTth_full) { // we want (latest fcount - oldest fcount) / BIG_BUFFER
     
     // latest fcount is always circbuf_tth[cbitth_newest-1]
     // except when cbitth_newest is zero
     // oldest fcount is always circbuf_tth[cbitth_newest] when buffer is full
 
-    if (cbitth_newest == 0) latfcount64 = circbuf_tth64[10000];
+    if (cbitth_newest == 0) latfcount64 = circbuf_tth64[BIG_BUFFER];
     else latfcount64 = circbuf_tth64[cbitth_newest-1];
     oldfcount64 = circbuf_tth64[cbitth_newest];
     
-    avgftth = double(latfcount64 - oldfcount64)/10000.0;
+    avgftth = double(latfcount64 - oldfcount64)/(float)BIG_BUFFER;
     // oldest fcount is always circbuf_ten[cbiten_newest-2]
     // except when cbiten_newest is <2 (zero or 1)
   } 
@@ -664,8 +665,8 @@ void setup()
   tim2Hz->resume();
 
   // Setup serial interfaces
-  Serial.begin(115200); // USB serial
-  Serial1.begin(9600);  // Hardware serial 1 to GPS module
+  SerialUSB.begin(115200); // USB serial
+  Serial.begin(9600);  // Hardware serial 1 to GPS module
   #ifdef GPSDO_BLUETOOTH
   // HC-06 module baud rate factory setting is 9600, 
   // use separate program to set baud rate to 115200
@@ -689,27 +690,27 @@ void setup()
   serial_commands_.AddCommand(&cmd_dp1_);
   serial_commands_.AddCommand(&cmd_dd1_);
  
-  Serial.println();
-  Serial.println(F(Program_Name));
-  Serial.println(F(Program_Version));
-  Serial.println();
+  SerialUSB.println();
+  SerialUSB.println(F(Program_Name));
+  SerialUSB.println(F(Program_Version));
+  SerialUSB.println();
 
   #ifdef GPSDO_UBX_CONFIG
   // Reconfigure the GPS receiver
   // first send the $PUBX configuration commands
   delay(3000); // give everything a moment to stabilize
-  Serial.println("GPS checker program started");
-  Serial.println("Sending $PUBX commands to GPS");  
+  SerialUSB.println("GPS checker program started");
+  SerialUSB.println("Sending $PUBX commands to GPS");  
   // first send the $PUBG configuration commands
-  Serial1.print("$PUBX,40,VTG,0,0,0,0,0,0*5E\r\n"); // disable all VTG messages (useless since we are stationary)
-  Serial1.print("$PUBX,41,1,0003,0003,38400,0*24\r\n"); // set GPS baud rate to 38400 in/out protocols NMEA+UBX
-  Serial1.flush();                              // empty the buffer
+  Serial.print("$PUBX,40,VTG,0,0,0,0,0,0*5E\r\n"); // disable all VTG messages (useless since we are stationary)
+  Serial.print("$PUBX,41,1,0003,0003,38400,0*24\r\n"); // set GPS baud rate to 38400 in/out protocols NMEA+UBX
+  Serial.flush();                              // empty the buffer
   delay(100);                                   // give it a moment
-  Serial1.end();                                // close serial port
-  Serial1.begin(38400);                         // re-open at new rate
+  Serial.end();                                // close serial port
+  Serial.begin(38400);                         // re-open at new rate
   delay(3000);
   // second, send the proprietary UBX configuration commands
-  Serial.println("Now sending UBX commands to GPS");
+  SerialUSB.println("Now sending UBX commands to GPS");
   ubxconfig();
   #endif // UBX_CONFIG
 
@@ -746,10 +747,10 @@ void setup()
 
   #ifdef GPSDO_AHT10
   if (! aht.begin()) {
-    Serial.println("Could not find AHT10? Check wiring");
+    SerialUSB.println("Could not find AHT10? Check wiring");
     while (1) delay(10);
   }
-  Serial.println("AHT10 found");
+  SerialUSB.println("AHT10 found");
   Wire.setClock(400000L); 
   #endif // AHT10
 
@@ -764,7 +765,7 @@ void setup()
   #ifdef GPSDO_BMP280_SPI
   // Initialize BMP280
   if (!bmp.begin()) {
-    Serial.println(F("Could not find a valid BMP280 sensor, check wiring or "
+    SerialUSB.println(F("Could not find a valid BMP280 sensor, check wiring or "
                       "try a different address!"));
     while (1) delay(10);
   }
@@ -777,8 +778,8 @@ void setup()
                   Adafruit_BMP280::STANDBY_MS_500); /* Standby time. */
   #endif // BMP280_SPI
   
-  Serial.println(F("GPSDO Starting"));
-  Serial.println();
+  SerialUSB.println(F("GPSDO Starting"));
+  SerialUSB.println();
 
   // Setup and start Timer 2 which measures OCXO frequency
   // setup pin used as ETR (10MHz external clock from OCXO)
@@ -858,29 +859,29 @@ void ubxconfig() // based on code by Brad Burleson
   bool gps_set_success = false; // flag setting GPS configuration success
   
   // This UBX command sets stationary mode and confirms it
-  Serial.println("Setting u-Blox M8 receiver navigation mode to stationary: ");
+  SerialUSB.println("Setting u-Blox M8 receiver navigation mode to stationary: ");
   uint8_t setNav[] = {
     0xB5, 0x62, 0x06, 0x24, 0x24, 0x00, 0xFF, 0xFF, 0x02, 0x03, 0x00, 0x00, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 0x05, 0x00, 0xFA, 0x00, 0xFA, 0x00, 0x64, 0x00, 0x2C, 0x01, 0x00, 0x00, 0x00, 0x00, 0x10, 0x27, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x49, 0x53};
   while(!gps_set_success)
   {
     sendUBX(setNav, sizeof(setNav)/sizeof(uint8_t));
-    Serial.println();
-    Serial.println("UBX command sent, waiting for UBX ACK... ");
+    SerialUSB.println();
+    SerialUSB.println("UBX command sent, waiting for UBX ACK... ");
     gps_set_success=getUBX_ACK(setNav);
     if (gps_set_success) 
-      Serial.println("Success: UBX ACK received! ");
+      SerialUSB.println("Success: UBX ACK received! ");
     else
-      Serial.println("Oops, something went wrong here... ");
+      SerialUSB.println("Oops, something went wrong here... ");
   }
 }
 
 // Send a byte array of UBX protocol to the GPS
 void sendUBX(uint8_t *MSG, uint8_t len) {
   for(int i=0; i<len; i++) {
-    Serial1.write(MSG[i]);
-    Serial.print(MSG[i], HEX);
+    Serial.write(MSG[i]);
+    SerialUSB.print(MSG[i], HEX);
   }
-  Serial1.println();
+  Serial.println();
 }
 
 // Calculate expected UBX ACK packet and parse UBX response from GPS
@@ -889,7 +890,7 @@ boolean getUBX_ACK(uint8_t *MSG) {
   uint8_t ackByteID = 0;
   uint8_t ackPacket[10];
   unsigned long startTime = millis();
-  Serial.print(" * Reading ACK response: ");
+  SerialUSB.print(" * Reading ACK response: ");
  
   // Construct the expected ACK packet    
   ackPacket[0] = 0xB5;  // header
@@ -914,24 +915,24 @@ boolean getUBX_ACK(uint8_t *MSG) {
     // Test for success
     if (ackByteID > 9) {
       // All packets in order!
-      Serial.println(" (SUCCESS!)");
+      SerialUSB.println(" (SUCCESS!)");
       return true;
     }
  
     // Timeout if no valid response in 3 seconds
     if (millis() - startTime > 3000) { 
-      Serial.println(" (FAILED!)");
+      SerialUSB.println(" (FAILED!)");
       return false;
     }
  
     // Make sure data is available to read
-    if (Serial1.available()) {
-      b = Serial1.read();
+    if (Serial.available()) {
+      b = Serial.read();
  
       // Check that bytes arrive in sequence as per expected ACK packet
       if (b == ackPacket[ackByteID]) { 
         ackByteID++;
-        Serial.print(b, HEX);
+        SerialUSB.print(b, HEX);
       } 
       else {
         ackByteID = 0;  // Reset and look again, invalid order
@@ -942,6 +943,8 @@ boolean getUBX_ACK(uint8_t *MSG) {
 }
 #endif // UBX_CONFIG
 
+int old_sec = 0;
+
 void loop()
 {
   serial_commands_.ReadSerial();  // process any command from either USB serial (usually 
@@ -950,8 +953,9 @@ void loop()
 
   if (tunnel_mode_flag) tunnelgps(); else
   
-  if (gpsWaitFix(waitFixTime))    // wait up to waitFixTime seconds for fix, returns true if we have a fix
+  if (true /* gpsWaitFix(waitFixTime)*/ )    // wait up to waitFixTime seconds for fix, returns true if we have a fix
   {
+#if 0
     #ifdef GPSDO_BLUETOOTH
     Serial2.println();
     Serial2.println();
@@ -959,13 +963,14 @@ void loop()
     Serial2.print(endFixmS - startGetFixmS);
     Serial2.println(F("mS"));
     #else
-    Serial.println();
-    Serial.println();
-    Serial.print(F("Fix time "));
-    Serial.print(endFixmS - startGetFixmS);
-    Serial.println(F("mS"));
+    SerialUSB.println();
+    SerialUSB.println();
+    SerialUSB.print(F("Fix time "));
+    SerialUSB.print(endFixmS - startGetFixmS);
+    SerialUSB.println(F("mS"));
     #endif // BLUETOOTH
-
+   }
+#endif
     GPSLat = gps.location.lat();
     GPSLon = gps.location.lng();
     GPSAlt = gps.altitude.meters();
@@ -974,7 +979,8 @@ void loop()
 
     hours = gps.time.hour();
     mins = gps.time.minute();
-    secs = gps.time.second();
+//    secs = gps.time.second();
+    secs = millis() / 1000;
     day = gps.date.day();
     month = gps.date.month();
     year = gps.date.year();
@@ -1025,7 +1031,8 @@ void loop()
     #ifdef GPSDO_BLUETOOTH 
     printGPSDOstats(Serial2);   // print stats to Bluetooth Serial
     #else                       // xor
-    printGPSDOstats(Serial);    // print stats to USB Serial
+    if (secs != old_sec) printGPSDOstats(SerialUSB);    // print stats to USB Serial
+    old_sec = secs;
     #endif // BLUETOOTH
 
     #ifdef GPSDO_OLED
@@ -1056,10 +1063,10 @@ void loop()
     Serial2.print( (millis() - startGetFixmS) / 1000 );
     Serial2.println(F("s"));
     #else
-    Serial.println();
-    Serial.print(F("Waiting for GPS Fix "));
-    Serial.print( (millis() - startGetFixmS) / 1000 );
-    Serial.println(F("s"));
+    SerialUSB.println();
+    SerialUSB.print(F("Waiting for GPS Fix "));
+    SerialUSB.print( (millis() - startGetFixmS) / 1000 );
+    SerialUSB.println(F("s"));
     #endif // BLUETOOTH
 
     // no fix, raise flush_ring_buffers_flag
@@ -1074,9 +1081,9 @@ void tunnelgps()
   Serial2.print(F("Entering tunnel mode..."));
   Serial2.println();
   #else
-  Serial.println();
-  Serial.print(F("Entering tunnel mode..."));
-  Serial.println();
+  SerialUSB.println();
+  SerialUSB.print(F("Entering tunnel mode..."));
+  SerialUSB.println();
   #endif // BLUETOOTH
 
   // tunnel mode operation goes here
@@ -1085,15 +1092,15 @@ void tunnelgps()
   uint8_t PCchar;
   while (millis() < endtunnelmS)
   {
-    if (Serial1.available() > 0)
-    {
-      GPSchar = Serial1.read();
-      Serial.write(GPSchar);  // echo NMEA stream to USB serial
-    }
     if (Serial.available() > 0)
     {
-      PCchar = Serial.read();
-      Serial1.write(PCchar);  // echo PC stream to GPS serial
+      GPSchar = Serial.read();
+      SerialUSB.write(GPSchar);  // echo NMEA stream to USB serial
+    }
+    if (SerialUSB.available() > 0)
+    {
+      PCchar = SerialUSB.read();
+      Serial.write(PCchar);  // echo PC stream to GPS serial
     }
   }
   // tunnel mode operation ends here
@@ -1103,9 +1110,9 @@ void tunnelgps()
   Serial2.print(F("Tunnel mode exited."));
   Serial2.println();
   #else
-  Serial.println();
-  Serial.print(F("Tunnel mode exited."));
-  Serial.println();
+  SerialUSB.println();
+  SerialUSB.print(F("Tunnel mode exited."));
+  SerialUSB.println();
   #endif // BLUETOOTH
   
   tunnel_mode_flag = false; // reset flag, exit tunnel mode
@@ -1144,10 +1151,10 @@ void docalibration()
           Serial2.print(countdown);
           Serial2.println(F("s"));
           #else
-          Serial.println();
-          Serial.print(F("Warming up "));
-          Serial.print(countdown);
-          Serial.println(F("s"));
+          SerialUSB.println();
+          SerialUSB.print(F("Warming up "));
+          SerialUSB.print(countdown);
+          SerialUSB.println(F("s"));
           #endif // BLUETOOTH
 
           // do nothing for 1s
@@ -1162,9 +1169,9 @@ void docalibration()
   Serial2.print(F("Calibrating..."));
   Serial2.println();
   #else
-  Serial.println();
-  Serial.print(F("Calibrating..."));
-  Serial.println();
+  SerialUSB.println();
+  SerialUSB.print(F("Calibrating..."));
+  SerialUSB.println();
   #endif // BLUETOOTH
 
   #ifdef GPSDO_OLED
@@ -1202,30 +1209,30 @@ void docalibration()
   // make sure we have a fix and data
   while (!cbTen_full) delay(1000);
   // measure frequency for Vctl=1.5V
-  Serial.println(F("set PWM 1.5V, wait 15s"));
+  SerialUSB.println(F("set PWM 1.5V, wait 15s"));
   analogWrite(VctlPWMOutputPin, 30720);
   delay(15000);
-  Serial.print(F("f1 (average frequency for 1.5V Vctl): "));
+  SerialUSB.print(F("f1 (average frequency for 1.5V Vctl): "));
   f1 = avgften;
-  Serial.print(f1,1);
-  Serial.println(F(" Hz"));
+  SerialUSB.print(f1,1);
+  SerialUSB.println(F(" Hz"));
   // make sure we have a fix and data again
   while (!cbTen_full) delay(1000);
   // measure frequency for Vctl=2.5V
-  Serial.println(F("set PWM 2.5V, wait 15s"));
+  SerialUSB.println(F("set PWM 2.5V, wait 15s"));
   analogWrite(VctlPWMOutputPin, 51200);
   delay(15000);
-  Serial.print(F("f2 (average frequency for 2.5V Vctl): "));
+  SerialUSB.print(F("f2 (average frequency for 2.5V Vctl): "));
   f2 = avgften;
-  Serial.print(f2,1);
-  Serial.println(F(" Hz"));
+  SerialUSB.print(f2,1);
+  SerialUSB.println(F(" Hz"));
   // slope s is (f2-f1) / (51200-30720) for PWM
   // So F=10MHz +/- 0.1Hz for PWM = 30720 - (e1 / s)
   // set Vctl
   // adjusted_PWM_output = formula
   adjusted_PWM_output = 30720 - ((f1 - 10000000.0) / ((f2 - f1) / 20480));
-  Serial.print(F("Calculated PWM: "));
-  Serial.println(adjusted_PWM_output);
+  SerialUSB.print(F("Calculated PWM: "));
+  SerialUSB.println(adjusted_PWM_output);
   analogWrite(VctlPWMOutputPin, adjusted_PWM_output); 
   // calibration done
   
@@ -1234,9 +1241,9 @@ void docalibration()
   Serial2.print(F("Calibration done."));
   Serial2.println();
   #else
-  Serial.println();
-  Serial.print(F("Calibration done."));
-  Serial.println();
+  SerialUSB.println();
+  SerialUSB.print(F("Calibration done."));
+  SerialUSB.println();
   #endif // BLUETOOTH
   
   force_calibration_flag = false; // reset flag, calibration done
@@ -1346,25 +1353,25 @@ bool gpsWaitFix(uint16_t waitSecs)
   //Serial2.print(waitSecs);
   //if (waitSecs > 1) Serial2.println(F(" seconds")); else Serial2.println(F(" second"));
   #else
-  Serial.println();
-  //Serial.print(F("Wait for GPS fix max. "));
-  //Serial.print(waitSecs);
-  //if (waitSecs > 1) Serial.println(F(" seconds")); else Serial.println(F(" second"));
+  SerialUSB.println();
+  //SerialUSB.print(F("Wait for GPS fix max. "));
+  //SerialUSB.print(waitSecs);
+  //if (waitSecs > 1) SerialUSB.println(F(" seconds")); else SerialUSB.println(F(" second"));
   #endif // Bluetooth
 
   endwaitmS = millis() + (waitSecs * 1000);
 
   while (millis() < endwaitmS)
   {
-    if (Serial1.available() > 0)
+    if (Serial.available() > 0)
     {
-      GPSchar = Serial1.read();
+      GPSchar = Serial.read();
       gps.encode(GPSchar);
       #ifdef GPSDO_VERBOSE_NMEA
       #ifdef GPSDO_BLUETOOTH
       Serial2.write(GPSchar); // echo NMEA stream to Bluetooth serial
       #else
-      Serial.write(GPSchar);  // echo NMEA stream to USB serial
+      SerialUSB.write(GPSchar);  // echo NMEA stream to USB serial
       #endif // Bluetooth
       #endif // VERBOSE_NMEA
     }
